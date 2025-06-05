@@ -1,0 +1,35 @@
+WITH favourite_product as (
+SELECT
+    customer_id,
+    product_category_name as produit_prefere
+FROM
+    (SELECT
+        o.customer_id,
+        p.product_category_name,
+        count(p.product_id) as nb_products_by_category,
+        ROW_NUMBER() OVER (
+                PARTITION BY o.customer_id 
+                ORDER BY COUNT(p.product_id) DESC
+            ) AS rang
+    FROM orders o
+    JOIN order_items i ON i.order_id=o.order_id
+    JOIN products p ON p.product_id=i.product_id
+    GROUP BY o.customer_id, p.product_category_name)
+WHERE rang=1
+)
+
+SELECT 
+    c.customer_id,
+    c.customer_state,
+    count(o.order_id) as nb_commandes,
+    count(i.product_id) as nb_produits,
+    sum(i.price) as depense_totale,
+    MAX(o.order_purchase_timestamp) as date_derniere_commande,
+    AVG(r.review_score) as score_moyen,
+    f.produit_prefere as type_produit_prefere
+FROM customers c
+JOIN orders o ON c.customer_id=o.customer_id
+JOIN order_items i ON i.order_id=o.order_id
+JOIN order_reviews r ON o.order_id=r.order_id
+JOIN favourite_product f ON f.customer_id=c.customer_id
+GROUP BY c.customer_id, c.customer_state

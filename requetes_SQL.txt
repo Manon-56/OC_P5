@@ -1,0 +1,119 @@
+Requête 1 : 
+
+SELECT 
+    *, 
+    (julianday(order_delivered_customer_date) - julianday(order_estimated_delivery_date)) as retard
+FROM orders
+WHERE
+    order_status = 'delivered' AND
+    order_purchase_timestamp >= date((select max(order_purchase_timestamp) from orders), '-3 months') AND
+    retard >= 3
+
+
+Requête 2 : 
+
+SELECT i.seller_id, o.order_status, sum(price) as chiffre_affaire
+FROM orders o, order_items i
+WHERE 
+    o.order_id = i.order_id AND
+    order_status = 'delivered'
+GROUP BY seller_id
+HAVING chiffre_affaire > 100000; 
+
+
+Requête 3 :
+
+SELECT 
+    i.seller_id, 
+    count(*) as nb_produits_vendus, 
+    MIN(o.order_purchase_timestamp) AS premiere_commande,
+    (SELECT MAX(order_delivered_customer_date) FROM orders) as date_du_jour    
+FROM orders o
+JOIN order_items i ON o.order_id = i.order_id
+WHERE order_status NOT IN ('unavailable','canceled')
+GROUP BY i.seller_id
+HAVING 
+    nb_produits_vendus > 30 
+    AND premiere_commande > DATETIME((SELECT MAX(order_delivered_customer_date) FROM orders), '-3 months');
+
+Requête 4 : 
+
+- Si on se place du côté vendeur (codes postaux des vendeurs, reviews regroupées par vendeur) : 
+SELECT 
+    code_postal, 
+    count(*) as nb_reviews, 
+    avg(score) as score_moyen_12_derniers_mois
+FROM 
+    (SELECT 
+        s.seller_zip_code_prefix as code_postal, 
+        o.order_purchase_timestamp as date_commande, 
+        r.review_score as score,
+        (julianday((SELECT MAX(order_purchase_timestamp) FROM orders)) - julianday(o.order_purchase_timestamp)) as commande_anciennete
+    FROM order_items i
+    JOIN order_reviews r ON r.order_id = i.order_id
+    JOIN sellers s ON i.seller_id = s.seller_id
+    JOIN orders o ON i.order_id = o.order_id
+    WHERE commande_anciennete < 365) commandes_12_derniers_mois
+GROUP BY code_postal
+HAVING nb_reviews > 30
+ORDER BY score_moyen_12_derniers_mois ASC LIMIT 5;
+
+- Si on se place du côté client (code postaux des clients, reviews regroupées par client)
+SELECT
+    code_postal_client,
+    avg(score_commande) as score_moyen,
+    count(score_commande) as nb_reviews
+FROM
+    (
+    SELECT
+        c.customer_id as id_client,
+        c.customer_zip_code_prefix as code_postal_client,
+        r.review_score as score_commande
+    FROM orders o
+    JOIN order_reviews r ON o.order_id=r.order_id
+    JOIN customers c ON c.customer_id=o.customer_id
+    WHERE order_delivered_customer_date > DATETIME((SELECT MAX(order_delivered_customer_date) FROM orders), '-12 months')
+    ) commandes_12_derniers_mois
+GROUP BY code_postal_client
+HAVING nb_reviews > 30
+ORDER BY score_moyen ASC LIMIT 5
+
+Requête finale : 
+Liste des clients (customer_id in customers), associés à la date de leur dernière commande (orders), le nombre total de produits achetés (order_items), le nombre de commandes ("fréquence d'achat", in orders), ainsi que la somme totale dépensée (order_items). On ajoutera également le score moyen (order_reviews), le type de produit préféré, et la région (customer_state in customers)
+
+
+WITH favourite_product as (
+SELECT
+    customer_id,
+    product_category_name as produit_prefere
+FROM
+    (SELECT
+        o.customer_id,
+        p.product_category_name,
+        count(p.product_id) as nb_products_by_category,
+        ROW_NUMBER() OVER (
+                PARTITION BY o.customer_id 
+                ORDER BY COUNT(p.product_id) DESC
+            ) AS rang
+    FROM orders o
+    JOIN order_items i ON i.order_id=o.order_id
+    JOIN products p ON p.product_id=i.product_id
+    GROUP BY o.customer_id, p.product_category_name)
+WHERE rang=1
+)
+
+SELECT 
+    c.customer_id,
+    c.customer_state,
+    count(DISTINCT o.order_id) as nb_commandes,
+    count(i.product_id) as nb_produits,
+    sum(i.price) as depense_totale,
+    MAX(o.order_purchase_timestamp) as date_derniere_commande,
+    AVG(r.review_score) as score_moyen,
+    f.produit_prefere as type_produit_prefere
+FROM customers c
+JOIN orders o ON c.customer_id=o.customer_id
+JOIN order_items i ON i.order_id=o.order_id
+JOIN order_reviews r ON o.order_id=r.order_id
+JOIN favourite_product f ON f.customer_id=c.customer_id
+GROUP BY c.customer_id, c.customer_state
