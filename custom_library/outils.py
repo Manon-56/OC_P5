@@ -90,13 +90,13 @@ def import_data(date_fin: str):
 
 
 
-def prepare_compute_evaluate_kmeans(df: pd.DataFrame, data_description: str, max_num_clusters: int, random_state: int = 42):
+def prepare_compute_evaluate_kmeans(df: pl.DataFrame, data_description: str, max_num_clusters: int, random_state: int = 42):
 
-	#Transform dataframe into polars for memory usage
-	df = pl.from_pandas(df)
 	# Préparation des données
 	pt = PowerTransformer(method="yeo-johnson")
-	X_transformed = pt.fit_transform(df)
+
+	data_to_transform = df.to_numpy()
+	X_transformed = pt.fit_transform(data_to_transform)
 
 	# Calcul des métriques pour différents nombres de clusters
 	range_clusters = range(2, max_num_clusters+1)
@@ -160,7 +160,7 @@ def prepare_compute_evaluate_kmeans(df: pd.DataFrame, data_description: str, max
 	print(f"Silhouette: K = {best_k_silhouette}")
 
 
-def prepare_compute_evaluate_dbscan(data: pd.DataFrame, data_description: str, eps: float, min_samples: int):
+def prepare_compute_evaluate_dbscan(data: pl.DataFrame, data_description: str, eps: float, min_samples: int, metric: str):
 	"""
 	Outputs : 
 	- Validity index : This is a numeric value between -1 and 1, with higher values indicating a ‘better’ clustering.
@@ -169,15 +169,17 @@ def prepare_compute_evaluate_dbscan(data: pd.DataFrame, data_description: str, e
 	print(f"# {data_description}")
 
 	#scale data
+	X_transformed = data.to_numpy(allow_copy = True)
 	pt = PowerTransformer(method="yeo-johnson", standardize = True)
-	X_transformed = pt.fit_transform(data)
+	X_transformed = pt.fit_transform(X_transformed)
 
 	#compute clustering
-	clustering = DBSCAN(
-		eps=eps, min_samples=min_samples, metric="euclidean", algorithm="ball_tree"
-	).fit(X_transformed)
+	dbscan = DBSCAN(
+		eps=eps, min_samples=min_samples, metric=metric, algorithm="ball_tree"
+	)
+	clustering = dbscan.fit(X_transformed)
 	clusters = clustering.labels_
-	print(f"Avec les paramètres choisis, DBSCAN a défini {len(set(clusters))} clusters")
+	print(f"Avec les paramètres choisis, DBSCAN a défini {len(set(clusters))-1} clusters")
 
 	#evaluate clustering through outliers rate
 	mask = (clusters == -1)
@@ -189,39 +191,41 @@ def prepare_compute_evaluate_dbscan(data: pd.DataFrame, data_description: str, e
 	X_WO_outliers = X_transformed[mask]
 	labels_WO_outliers = clusters[mask]
 
-	# Score spécifique aux algorithmes de densité
-	validity = validity_index(X_WO_outliers, labels_WO_outliers, metric="euclidean")
-	print(f"Density-based cluster validity : {validity}")
+	if len(np.unique(labels_WO_outliers))<10:
 
-	# Moyennes par cluster
-	unique_labels = np.unique(labels_WO_outliers)
-	cluster_means = []
-	for label in unique_labels:
-		cluster_points = X_WO_outliers[labels_WO_outliers == label]
-		cluster_means.append(cluster_points.mean(axis=0))
-	cluster_means = np.array(cluster_means)
+		# Score spécifique aux algorithmes de densité
+		validity = validity_index(X_WO_outliers, labels_WO_outliers, metric="euclidean")
+		print(f"Density-based cluster validity : {validity}")
 
-	# Radar plot
-	num_vars = X_WO_outliers.shape[1]
-	angles = np.linspace(0, 2 * np.pi, num_vars, endpoint=False).tolist()
-	angles += angles[:1]  # fermeture du polygone
+		# Moyennes par cluster
+		unique_labels = np.unique(labels_WO_outliers)
+		cluster_means = []
+		for label in unique_labels:
+			cluster_points = X_WO_outliers[labels_WO_outliers == label]
+			cluster_means.append(cluster_points.mean(axis=0))
+		cluster_means = np.array(cluster_means)
+
+		# Radar plot
+		num_vars = X_WO_outliers.shape[1]
+		angles = np.linspace(0, 2 * np.pi, num_vars, endpoint=False).tolist()
+		angles += angles[:1]  # fermeture du polygone
 
 
-	# Plot
-	fig, ax = plt.subplots(figsize=(8, 6), subplot_kw=dict(polar=True))
+		# Plot
+		fig, ax = plt.subplots(figsize=(8, 6), subplot_kw=dict(polar=True))
 
-	for i, row in enumerate(cluster_means):
-		row_closed = np.concatenate([row, [row[0]]])
-		ax.plot(angles, row_closed, label=f"Cluster {unique_labels[i]}")
-		ax.fill(angles, row_closed, alpha=0.2)
+		for i, row in enumerate(cluster_means):
+			row_closed = np.concatenate([row, [row[0]]])
+			ax.plot(angles, row_closed, label=f"Cluster {unique_labels[i]}")
+			ax.fill(angles, row_closed, alpha=0.2)
 
-	# Labels des axes
-	feature_labels = [f"{data.columns[i]}" for i in range(num_vars)]
-	angles_labels = angles[:-1]  # enlever l'angle du doublon
-	ax.set_xticks(angles_labels)
-	ax.set_xticklabels(feature_labels)
+		# Labels des axes
+		feature_labels = [f"{data.columns[i]}" for i in range(num_vars)]
+		angles_labels = angles[:-1]  # enlever l'angle du doublon
+		ax.set_xticks(angles_labels)
+		ax.set_xticklabels(feature_labels)
 
-	ax.set_title("Profil moyen par cluster (DBSCAN)", y=1.08)
-	ax.legend(loc="upper right", bbox_to_anchor=(1.2, 1.1))
-	plt.tight_layout()
-	plt.show()
+		ax.set_title("Profil moyen par cluster (DBSCAN)", y=1.08)
+		ax.legend(loc="upper right", bbox_to_anchor=(1.2, 1.1))
+		plt.tight_layout()
+		plt.show()
